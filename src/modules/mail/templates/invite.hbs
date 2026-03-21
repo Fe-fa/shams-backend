@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Welcome to SHAMS</title>
+  <style>
+    *  { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Arial, sans-serif;
+      background: #f3f4f6;
+      color: #1f2937;
+      line-height: 1.6;
+    }
+    .wrapper  { max-width: 620px; margin: 40px auto; padding: 0 16px 40px; }
+    .card     { background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,.08); }
+
+    /* ── Header ── */
+    .header   {
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      padding: 36px 32px;
+      text-align: center;
+    }
+    .header h1 { color: #fff; font-size: 24px; font-weight: 700; letter-spacing: -.5px; }
+    .header p  { color: rgba(255,255,255,.8); font-size: 14px; margin-top: 6px; }
+
+    /* ── Body ── */
+    .body { padding: 32px; }
+    .body h2  { font-size: 20px; font-weight: 700; margin-bottom: 8px; }
+    .body p   { color: #4b5563; font-size: 15px; margin-bottom: 12px; }
+
+    /* ── Role badge ── */
+    .role-badge {
+      display: inline-block;
+      background: #ede9fe;
+      color: #6d28d9;
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: .5px;
+      padding: 4px 12px;
+      border-radius: 999px;
+      text-transform: uppercase;
+      margin-bottom: 20px;
+    }
+
+    /* ── Info box ── */
+    .info-box {
+      background: #f9fafb;
+      border: 1px solid #e5e7eb;
+      border-left: 4px solid #667eea;
+      border-radius: 8px;
+      padding: 20px;
+      margin: 20px 0;
+    }
+    .info-box table { width: 100%; border-collapse: collapse; }
+    .info-box td    { padding: 6px 0; font-size: 14px; }
+    .info-box td:first-child { color: #6b7280; width: 48%; font-weight: 600; }
+    .info-box td:last-child  { color: #111827; font-weight: 700; word-break: break-all; }
+
+    /* ── Verification code ── */
+    .code-label { font-size: 14px; color: #6b7280; margin-bottom: 8px; }
+    .code-box {
+      background: #fff;
+      border: 2px dashed #667eea;
+      border-radius: 12px;
+      padding: 20px;
+      text-align: center;
+      font-size: 36px;
+      font-weight: 800;
+      letter-spacing: 8px;
+      color: #667eea;
+      margin: 8px 0 24px;
+    }
+
+    /* ── CTA button ── */
+    .btn-wrap { text-align: center; margin: 24px 0; }
+    .btn {
+      display: inline-block;
+      background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+      color: #ffffff !important;
+      text-decoration: none;
+      padding: 14px 36px;
+      border-radius: 10px;
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: .3px;
+    }
+
+    /* ── Warning box ── */
+    .warning {
+      background: #fffbeb;
+      border: 1px solid #fde68a;
+      border-radius: 8px;
+      padding: 14px 18px;
+      font-size: 13px;
+      color: #92400e;
+      margin-top: 20px;
+    }
+    .warning strong { color: #78350f; }
+
+    /* ── Footer ── */
+    .footer { text-align: center; padding: 20px 32px; border-top: 1px solid #f3f4f6; }
+    .footer p { font-size: 12px; color: #9ca3af; }
+    .footer a { color: #667eea; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <div class="wrapper">
+    <div class="card">
+
+      <!-- Header -->
+      <div class="header">
+        <h1>🏥 Welcome to SHAMS</h1>
+        <p>Smart Healthcare Appointment Management System</p>
+      </div>
+
+      <!-- Body -->
+      <div class="body">
+        <h2>Hello, {{firstName}}!</h2>
+        <p>
+          An account has been created for you by a SHAMS administrator.
+          You can now log in and start using the platform.
+        </p>
+
+        <span class="role-badge">{{role}}</span>
+
+        <!-- Credentials -->
+        <div class="info-box">
+          <table>
+            <tr>
+              <td>Email (username)</td>
+              <td>{{email}}</td>
+            </tr>
+            <tr>
+              <td>Temporary&nbsp;Password</td>
+              <td>{{password}}</td>
+            </tr>
+          </table>
+        </div>
+
+        <!-- Verification code -->
+        <p class="code-label">Use this code to verify your account after first login:</p>
+        <div class="code-box">{{verificationCode}}</div>
+
+        <!-- CTA -->
+        <div class="btn-wrap">
+          <a href="{{loginUrl}}" class="btn">Login to SHAMS →</a>
+        </div>
+
+        <!-- Warning -->
+        <div class="warning">
+          <strong>⚠️ Security reminder:</strong> This is a temporary password.
+          Please change it immediately after your first login. Do not share
+          your credentials with anyone.
+        </div>
+      </div>
+
+      <!-- Footer -->
+      <div class="footer">
+        <p>
+          You received this email because an administrator created an account
+          for you on SHAMS.<br />
+          Questions? Contact
+          <a href="mailto:support@shams.health">support@shams.health</a>
+        </p>
+        <p style="margin-top:8px">&copy; {{year}} SHAMS. All rights reserved.</p>
+      </div>
+
+    </div>
+  </div>
+</body>
+</html>

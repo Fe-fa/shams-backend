@@ -1,0 +1,343 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  DOCTOR
+  PATIENT
+  NURSE
+}
+
+enum AppointmentStatus {
+  SCHEDULED
+  CONFIRMED
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+  NO_SHOW
+  RESCHEDULED
+}
+
+enum AppointmentType {
+  CONSULTATION
+  FOLLOW_UP
+  LABORATORY
+  EMERGENCY
+  VACCINATION
+  CHECKUP
+}
+
+enum PriorityLevel {
+  EMERGENCY
+  HIGH
+  MEDIUM
+  LOW
+}
+
+enum NotificationType {
+  SMS
+  EMAIL
+  PUSH
+  IN_APP
+}
+
+enum NotificationStatus {
+  PENDING
+  SENT
+  DELIVERED
+  FAILED
+  READ
+}
+
+enum QueueStatus {
+  WAITING
+  CALLED
+  IN_SERVICE
+  COMPLETED
+  SKIPPED
+  LEFT
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  REFUNDED
+}
+
+enum PaymentMethod {
+  CREDIT_CARD
+  CASH
+  INSURANCE
+  MOBILE_MONEY
+}
+
+model User {
+  id               Int       @id @default(autoincrement())
+  email            String    @unique
+  phone            String    @unique
+  hashedPassword   String    @map("hashed_password")
+
+  firstName        String    @map("first_name")
+  lastName         String    @map("last_name")
+  dateOfBirth      DateTime? @map("date_of_birth")
+  gender           String?
+  address          String?
+
+  role             UserRole  @default(PATIENT)
+  isActive         Boolean   @default(true)  @map("is_active")
+  isVerified       Boolean   @default(false) @map("is_verified")
+
+  verificationCode       String?   @map("verification_code")
+  verificationCodeExpiry DateTime? @map("verification_code_expiry")
+
+  resetPasswordToken  String?   @map("reset_password_token")
+  resetPasswordExpiry DateTime? @map("reset_password_expiry")
+
+  bloodType      String? @map("blood_type")
+  allergies      String?
+  medicalHistory String? @map("medical_history")
+
+  specialization String?
+  licenseNumber  String? @map("license_number")
+  department     String?
+
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt      @map("updated_at")
+  lastLogin DateTime?                 @map("last_login")
+
+  patientAppointments Appointment[]  @relation("PatientAppointments")
+  doctorAppointments  Appointment[]  @relation("DoctorAppointments")
+  notifications       Notification[]
+  patientPayments     Payment[]      @relation("PatientPayments")
+  patientTransactions Transaction[]  @relation("PatientTransactions")
+
+  @@map("users")
+}
+
+model Appointment {
+  id Int @id @default(autoincrement())
+
+  patientId Int  @map("patient_id")
+  doctorId  Int? @map("doctor_id")
+
+  appointmentDate DateTime          @map("appointment_date")
+  appointmentType AppointmentType   @map("appointment_type")
+  status          AppointmentStatus @default(SCHEDULED)
+  priority        PriorityLevel     @default(MEDIUM)
+
+  durationMinutes   Int       @default(30) @map("duration_minutes")
+  estimatedWaitTime Int?      @map("estimated_wait_time")
+  actualStartTime   DateTime? @map("actual_start_time")
+  actualEndTime     DateTime? @map("actual_end_time")
+
+  noShowProbability Float? @map("no_show_probability")
+  predictedDuration Int?   @map("predicted_duration")
+  aiPriorityScore   Float? @map("ai_priority_score")
+
+  chiefComplaint String? @map("chief_complaint")
+  symptoms       String?
+  vitalSigns     String? @map("vital_signs")
+  diagnosis      String?
+  prescription   String?
+  notes          String?
+
+  reminderSent         Boolean   @default(false) @map("reminder_sent")
+  reminderSentAt       DateTime?                 @map("reminder_sent_at")
+  confirmationRequired Boolean   @default(true)  @map("confirmation_required")
+  confirmedAt          DateTime?                 @map("confirmed_at")
+
+  queuePosition Int?      @map("queue_position")
+  checkedIn     Boolean   @default(false) @map("checked_in")
+  checkInTime   DateTime?                @map("check_in_time")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  patient User  @relation("PatientAppointments", fields: [patientId], references: [id], onDelete: Cascade)
+  doctor  User? @relation("DoctorAppointments",  fields: [doctorId],  references: [id], onDelete: SetNull)
+
+  notifications Notification[]
+
+  serviceId Int?     @map("service_id")
+  service   Service? @relation("AppointmentService", fields: [serviceId], references: [id])
+
+  payment      Payment?
+  transactions Transaction[] @relation("AppointmentTransactions")
+
+  @@index([patientId])
+  @@index([doctorId])
+  @@index([appointmentDate])
+  @@map("appointments")
+}
+
+model Notification {
+  id Int @id @default(autoincrement())
+
+  userId        Int  @map("user_id")
+  appointmentId Int? @map("appointment_id")
+
+  notificationType NotificationType   @map("notification_type")
+  status           NotificationStatus @default(PENDING)
+
+  title        String
+  message      String
+  templateName String? @map("template_name")
+
+  recipientEmail String? @map("recipient_email")
+  recipientPhone String? @map("recipient_phone")
+
+  scheduledAt DateTime? @map("scheduled_at")
+  sentAt      DateTime? @map("sent_at")
+  deliveredAt DateTime? @map("delivered_at")
+  readAt      DateTime? @map("read_at")
+  failedAt    DateTime? @map("failed_at")
+
+  errorMessage String? @map("error_message")
+  retryCount   Int     @default(0) @map("retry_count")
+
+  isRead   Boolean @default(false) @map("is_read")
+  priority String  @default("normal")
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  user        User         @relation(fields: [userId],        references: [id], onDelete: Cascade)
+  appointment Appointment? @relation(fields: [appointmentId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@index([appointmentId])
+  @@map("notifications")
+}
+
+model Queue {
+  id Int @id @default(autoincrement())
+
+  queueDate   DateTime @map("queue_date")
+  department  String
+  queueNumber Int      @map("queue_number")
+
+  patientId     Int    @map("patient_id")
+  appointmentId Int?   @map("appointment_id")
+  patientName   String @map("patient_name")
+
+  status        QueueStatus @default(WAITING)
+  priorityLevel String      @default("medium") @map("priority_level")
+  priorityScore Float       @default(1.0)      @map("priority_score")
+
+  checkInTime       DateTime  @map("check_in_time")
+  calledTime        DateTime? @map("called_time")
+  serviceStartTime  DateTime? @map("service_start_time")
+  serviceEndTime    DateTime? @map("service_end_time")
+  estimatedWaitTime Int?      @map("estimated_wait_time")
+  actualWaitTime    Int?      @map("actual_wait_time")
+
+  serviceType String  @map("service_type")
+  doctorName  String? @map("doctor_name")
+  roomNumber  String? @map("room_number")
+
+  isEmergency Boolean @default(false) @map("is_emergency")
+  notified    Boolean @default(false)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  @@index([patientId])
+  @@index([appointmentId])
+  @@index([queueDate])
+  @@index([department])
+  @@map("queues")
+}
+
+model Service {
+  id          Int             @id @default(autoincrement())
+  name        String          @unique
+  description String?
+  price       Decimal         @db.Decimal(10, 2)
+  isActive    Boolean         @default(true)  @map("is_active")
+  type        AppointmentType
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt      @map("updated_at")
+
+  appointments Appointment[] @relation("AppointmentService")
+  payments     Payment[]     @relation("ServicePayments")
+  transactions Transaction[] @relation("ServiceTransactions")
+
+  @@map("services")
+}
+
+model Payment {
+  id     Int           @id @default(autoincrement())
+  amount Decimal       @db.Decimal(10, 2)
+  status PaymentStatus @default(PENDING)
+  method PaymentMethod
+
+  transactionId String? @unique @map("transaction_id")
+  phoneNumber   String? @map("phone_number")
+
+  appointmentId Int  @unique @map("appointment_id")
+  patientId     Int? @map("patient_id")
+  serviceId     Int? @map("service_id")
+
+  notes    String?
+  currency String  @default("KES")
+
+  paidAt    DateTime? @map("paid_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  updatedAt DateTime  @updatedAt      @map("updated_at")
+
+  appointment Appointment  @relation(fields: [appointmentId], references: [id], onDelete: Cascade)
+  patient     User?        @relation("PatientPayments", fields: [patientId], references: [id])
+  service     Service?     @relation("ServicePayments", fields: [serviceId], references: [id])
+  transaction Transaction?
+
+  @@index([patientId])
+  @@index([serviceId])
+  @@index([status])
+  @@map("payments")
+}
+
+model Transaction {
+  id              Int           @id @default(autoincrement())
+  referenceNumber String        @unique @map("reference_number")
+
+  paymentId     Int @unique @map("payment_id")
+  patientId     Int @map("patient_id")
+  appointmentId Int @map("appointment_id")
+  serviceId     Int? @map("service_id")
+
+  amount        Decimal       @db.Decimal(10, 2)
+  currency      String        @default("KES")
+  paymentMethod PaymentMethod @map("payment_method")
+  status        PaymentStatus @default(PENDING)
+
+  externalRef       String? @map("external_ref")
+  description       String?
+  phoneNumber       String? @map("phone_number")
+  merchantRequestId String? @map("merchant_request_id")
+  checkoutRequestId String? @unique @map("checkout_request_id")
+  resultCode        Int?    @map("result_code")
+  resultDesc        String? @map("result_desc")
+
+  processedAt DateTime? @map("processed_at")
+  createdAt   DateTime  @default(now()) @map("created_at")
+  updatedAt   DateTime  @updatedAt      @map("updated_at")
+
+  payment     Payment     @relation(fields: [paymentId], references: [id])
+  patient     User        @relation("PatientTransactions", fields: [patientId], references: [id])
+  appointment Appointment @relation("AppointmentTransactions", fields: [appointmentId], references: [id])
+  service     Service?    @relation("ServiceTransactions", fields: [serviceId], references: [id])
+
+  @@index([patientId])
+  @@index([appointmentId])
+  @@index([status])
+  @@index([createdAt])
+  @@map("transactions")
+}
