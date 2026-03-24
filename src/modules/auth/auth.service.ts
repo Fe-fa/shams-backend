@@ -4,10 +4,12 @@ import {
   UnauthorizedException,
   NotFoundException,
   BadRequestException,
+  InternalServerErrorException,
 } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
+import { SmsService } from '../sms/sms.service';
 import * as bcrypt from 'bcrypt';
 import { RegisterDto } from './dto/register.dto';
 import { LoginDto } from './dto/login.dto';
@@ -18,9 +20,10 @@ import { ResetPasswordDto } from './dto/reset-password.dto';
 @Injectable()
 export class AuthService {
   constructor(
-    private prisma: PrismaService,
-    private jwtService: JwtService,
-    private mailService: MailService,
+    private readonly prisma: PrismaService,
+    private readonly jwtService: JwtService,
+    private readonly mailService: MailService,
+    private readonly smsService: SmsService,
   ) {}
 
   private generateVerificationCode(): string {
@@ -28,11 +31,46 @@ export class AuthService {
   }
 
   private generateResetToken(): string {
-    return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+    return (
+      Math.random().toString(36).substring(2, 15) +
+      Math.random().toString(36).substring(2, 15)
+    );
   }
 
+  /**
+   * Send verification code to both email and SMS
+   */
+  private async sendVerificationNotifications(
+    email: string,
+    phone: string,
+    code: string,
+    firstName: string,
+  ) {
+    const [emailResult, smsResult] = await Promise.allSettled([
+      this.mailService.sendVerificationEmail(email, code, firstName),
+      this.smsService.sendVerificationCode(phone, code, firstName),
+    ]);
+
+    const emailSent = emailResult.status === 'fulfilled';
+    const smsSent = smsResult.status === 'fulfilled';
+
+    if (!emailSent) {
+      console.error('Failed to send verification email:', emailResult);
+    }
+
+    if (!smsSent) {
+      console.error('Failed to send verification SMS:', smsResult);
+    }
+
+    if (!emailSent && !smsSent) {
+      throw new InternalServerErrorException(
+        'Account created, but failed to send verification code by email and SMS',
+      );
+    }
+
+    return { emailSent, smsSent };
+  }
   async register(registerDto: RegisterDto) {
-    // Check if user exists
     const existingUser = await this.prisma.user.findFirst({
       where: {
         OR: [{ email: registerDto.email }, { phone: registerDto.phone }],
@@ -40,17 +78,16 @@ export class AuthService {
     });
 
     if (existingUser) {
-      throw new ConflictException('User with this email or phone already exists');
+      throw new ConflictException(
+        'User with this email or phone already exists',
+      );
     }
 
-    // Hash password
     const hashedPassword = await bcrypt.hash(registerDto.password, 10);
 
-    // Generate verification code
     const verificationCode = this.generateVerificationCode();
-    const verificationCodeExpiry = new Date(Date.now() + 15 * 60 * 1000); // 15 minutes
+    const verificationCodeExpiry = new Date(Date.now() + 15 * 60 * 1000);
 
-    // Create user
     const user = await this.prisma.user.create({
       data: {
         email: registerDto.email,
@@ -67,13 +104,20 @@ export class AuthService {
       },
     });
 
-    // Send verification email
-    await this.mailService.sendVerificationEmail(user.email, verificationCode, user.firstName);
+    const notifications = await this.sendVerificationNotifications(
+      user.email,
+      user.phone,
+      verificationCode,
+      user.firstName,
+    );
 
     return {
-      message: 'Registration successful. Please check your email for verification code.',
+      message:
+        'Registration successful. Please check your email or SMS for the verification code.',
       userId: user.id,
       email: user.email,
+      phone: user.phone,
+      notifications,
     };
   }
 
@@ -94,11 +138,13 @@ export class AuthService {
       throw new BadRequestException('Invalid verification code');
     }
 
-    if (user.verificationCodeExpiry && user.verificationCodeExpiry < new Date()) {
+    if (
+      user.verificationCodeExpiry &&
+      user.verificationCodeExpiry < new Date()
+    ) {
       throw new BadRequestException('Verification code expired');
     }
 
-    // Update user
     await this.prisma.user.update({
       where: { id: user.id },
       data: {
@@ -137,18 +183,27 @@ export class AuthService {
       },
     });
 
-    await this.mailService.sendVerificationEmail(user.email, verificationCode, user.firstName);
+    const notifications = await this.sendVerificationNotifications(
+      user.email,
+      user.phone,
+      verificationCode,
+      user.firstName,
+    );
 
     return {
-      message: 'Verification code sent successfully',
+      message:
+        'Verification code sent successfully to both email and SMS',
+      notifications,
     };
   }
 
   async login(loginDto: LoginDto) {
-    // Find user by email or phone
     const user = await this.prisma.user.findFirst({
       where: {
-        OR: [{ email: loginDto.emailOrPhone }, { phone: loginDto.emailOrPhone }],
+        OR: [
+          { email: loginDto.emailOrPhone },
+          { phone: loginDto.emailOrPhone },
+        ],
       },
     });
 
@@ -156,8 +211,10 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    // Verify password
-    const isPasswordValid = await bcrypt.compare(loginDto.password, user.hashedPassword);
+    const isPasswordValid = await bcrypt.compare(
+      loginDto.password,
+      user.hashedPassword,
+    );
 
     if (!isPasswordValid) {
       throw new UnauthorizedException('Invalid credentials');
@@ -171,13 +228,11 @@ export class AuthService {
       throw new UnauthorizedException('Your account has been deactivated');
     }
 
-    // Update last login
     await this.prisma.user.update({
       where: { id: user.id },
       data: { lastLogin: new Date() },
     });
 
-    // Generate JWT token
     const payload = {
       sub: user.id,
       email: user.email,
@@ -206,14 +261,13 @@ export class AuthService {
     });
 
     if (!user) {
-      // Don't reveal if email exists
       return {
         message: 'If the email exists, a reset link will be sent',
       };
     }
 
     const resetToken = this.generateResetToken();
-    const resetPasswordExpiry = new Date(Date.now() + 60 * 60 * 1000); // 1 hour
+    const resetPasswordExpiry = new Date(Date.now() + 60 * 60 * 1000);
 
     await this.prisma.user.update({
       where: { id: user.id },
@@ -223,7 +277,11 @@ export class AuthService {
       },
     });
 
-    await this.mailService.sendPasswordResetEmail(user.email, resetToken, user.firstName);
+    await this.mailService.sendPasswordResetEmail(
+      user.email,
+      resetToken,
+      user.firstName,
+    );
 
     return {
       message: 'If the email exists, a reset link will be sent',
@@ -241,11 +299,17 @@ export class AuthService {
       throw new BadRequestException('Invalid or expired reset token');
     }
 
-    if (user.resetPasswordExpiry && user.resetPasswordExpiry < new Date()) {
+    if (
+      user.resetPasswordExpiry &&
+      user.resetPasswordExpiry < new Date()
+    ) {
       throw new BadRequestException('Reset token has expired');
     }
 
-    const hashedPassword = await bcrypt.hash(resetPasswordDto.newPassword, 10);
+    const hashedPassword = await bcrypt.hash(
+      resetPasswordDto.newPassword,
+      10,
+    );
 
     await this.prisma.user.update({
       where: { id: user.id },
@@ -256,7 +320,10 @@ export class AuthService {
       },
     });
 
-    await this.mailService.sendPasswordResetSuccessEmail(user.email, user.firstName);
+    await this.mailService.sendPasswordResetSuccessEmail(
+      user.email,
+      user.firstName,
+    );
 
     return {
       message: 'Password reset successfully',

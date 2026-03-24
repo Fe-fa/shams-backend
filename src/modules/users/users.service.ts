@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
+import { SmsService } from '../sms/sms.service';
 import { UpdateUserDto } from './dto/update-user.dto';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UserRole } from '@prisma/client';
@@ -14,13 +15,11 @@ import * as bcrypt from 'bcrypt';
 @Injectable()
 export class UsersService {
   constructor(
-    private prisma: PrismaService,
-    private mailService: MailService,
+    private readonly prisma: PrismaService,
+    private readonly mailService: MailService,
+    private readonly smsService: SmsService,
   ) {}
 
-  // ─────────────
-  // Admin creates any user role
-  // ─────────────
   async adminCreateUser(createUserDto: CreateUserDto, creatorRole: string) {
     if (creatorRole === 'DOCTOR' && createUserDto.role !== 'PATIENT') {
       throw new ForbiddenException('Doctors can only create PATIENT accounts');
@@ -43,7 +42,10 @@ export class UsersService {
     const verificationCode = Math.floor(
       100000 + Math.random() * 900000,
     ).toString();
-    const verificationCodeExpiry = new Date(Date.now() + 24 * 60 * 60 * 1000);
+
+    const verificationCodeExpiry = new Date(
+      Date.now() + 24 * 60 * 60 * 1000,
+    );
 
     const user = await this.prisma.user.create({
       data: {
@@ -63,32 +65,66 @@ export class UsersService {
       },
     });
 
-    // ── Send invite email 
+    let emailSent = false;
+    let smsSent = false;
+
+    const tasks: Promise<any>[] = [];
+    const channels: ('email' | 'sms')[] = [];
+
     if (createUserDto.sendInviteEmail !== false) {
-      try {
-        await this.mailService.sendInviteEmail(
+      tasks.push(
+        this.mailService.sendInviteEmail(
           user.email,
           user.firstName,
-          createUserDto.password, // plain-text; user must change after first login
+          createUserDto.password,
           verificationCode,
           user.role,
-        );
-      } catch (error) {
-        // Non-fatal — account is still created even if mail fails
-        console.error('Failed to send invite email:', error);
-      }
+        ),
+      );
+      channels.push('email');
     }
+
+    tasks.push(
+      this.smsService.sendInviteVerificationCode(user.phone, {
+        firstName: user.firstName,
+        code: verificationCode,
+        role: user.role,
+      }),
+    );
+    channels.push('sms');
+
+    const results = await Promise.allSettled(tasks);
+
+    results.forEach((result, index) => {
+      const channel = channels[index];
+
+      if (channel === 'email') {
+        emailSent = result.status === 'fulfilled';
+        if (result.status === 'rejected') {
+          console.error('Failed to send invite email:', result.reason);
+        }
+      }
+
+      if (channel === 'sms') {
+        smsSent = result.status === 'fulfilled';
+        if (result.status === 'rejected') {
+          console.error('Failed to send invite SMS:', result.reason);
+        }
+      }
+    });
 
     return {
       message: `${user.role} account created successfully`,
       userId: user.id,
       email: user.email,
+      phone: user.phone,
+      notifications: {
+        emailSent,
+        smsSent,
+      },
     };
   }
 
-  // ─────────────
-  // List all users (admin)
-  // ─────────────
   async findAll(role?: UserRole) {
     const where = role ? { role } : {};
     return this.prisma.user.findMany({
@@ -112,9 +148,6 @@ export class UsersService {
     });
   }
 
-  // ─────────────
-  // Single user
-  // ─────────────
   async findOne(id: number) {
     const user = await this.prisma.user.findUnique({
       where: { id },
@@ -140,18 +173,24 @@ export class UsersService {
         lastLogin: true,
       },
     });
-    if (!user) throw new NotFoundException('User not found');
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
     return user;
   }
 
-  // ─────────────
-  // Doctors list
-  // ─────────────
   async findDoctors(specialization?: string) {
     const where: any = { role: UserRole.DOCTOR, isActive: true };
+
     if (specialization) {
-      where.specialization = { contains: specialization, mode: 'insensitive' };
+      where.specialization = {
+        contains: specialization,
+        mode: 'insensitive',
+      };
     }
+
     return this.prisma.user.findMany({
       where,
       select: {
@@ -165,9 +204,6 @@ export class UsersService {
     });
   }
 
-  // ─────────────
-  // Update user
-  // ─────────────
   async update(
     id: number,
     updateUserDto: UpdateUserDto,
@@ -175,23 +211,25 @@ export class UsersService {
     currentUserRole: string,
   ) {
     const user = await this.prisma.user.findUnique({ where: { id } });
-    if (!user) throw new NotFoundException('User not found');
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
 
     if (currentUserRole === 'PATIENT' && id !== currentUserId) {
       throw new ForbiddenException('You can only update your own profile');
     }
+
     if (currentUserRole === 'DOCTOR' && id !== currentUserId) {
       throw new ForbiddenException('You can only update your own profile');
     }
 
-    // Only admins may flip isActive
     if (updateUserDto.isActive !== undefined && currentUserRole !== 'ADMIN') {
       delete updateUserDto.isActive;
     }
 
     const updateData: any = { ...updateUserDto };
 
-    // Convert dateOfBirth string → Date
     if (updateUserDto.dateOfBirth) {
       updateData.dateOfBirth = new Date(updateUserDto.dateOfBirth);
     }
@@ -219,31 +257,27 @@ export class UsersService {
     });
   }
 
-  // ─────────────
-  // Soft delete
-  // ─────────────
   async remove(id: number, currentUserRole: string) {
     if (currentUserRole !== 'ADMIN') {
       throw new ForbiddenException('Only admins can delete users');
     }
+
     const user = await this.prisma.user.findUnique({ where: { id } });
-    if (!user) throw new NotFoundException('User not found');
+
+    if (!user) {
+      throw new NotFoundException('User not found');
+    }
+
     return this.prisma.user.update({
       where: { id },
       data: { isActive: false },
     });
   }
 
-  // ─────────────
-  // Own profile
-  // ─────────────
   async getProfile(userId: number) {
     return this.findOne(userId);
   }
 
-  // ─────────────
-  // Stats
-  // ─────────────
   async getStats(userId: number, role: string) {
     if (role === 'PATIENT') {
       const [total, upcoming, completed, cancelled] = await Promise.all([
@@ -262,6 +296,7 @@ export class UsersService {
           where: { patientId: userId, status: 'CANCELLED' },
         }),
       ]);
+
       return { total, upcoming, completed, cancelled };
     }
 
@@ -287,6 +322,7 @@ export class UsersService {
           },
         }),
       ]);
+
       return { total, today, completed, pending };
     }
 

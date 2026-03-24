@@ -154,7 +154,7 @@ export class AppointmentsService {
     // Notify patient — confirmation
     try {
       const doctorName = updated.doctor
-        ? `Dr. ${updated.doctor.firstName} ${updated.doctor.lastName}`
+        ? `${updated.doctor.firstName} ${updated.doctor.lastName}`
         : 'To be assigned';
 
       await this.notificationsService.notifyAll(
