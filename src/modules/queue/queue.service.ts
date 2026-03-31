@@ -54,8 +54,7 @@ export class QueueService {
       },
     });
   }
-
-  async findAll(department?: string, status?: QueueStatus) {
+async findAll(department?: string, status?: QueueStatus) {
     const where: any = {
       queueDate: {
         gte: new Date(new Date().setHours(0, 0, 0, 0)),
@@ -65,10 +64,21 @@ export class QueueService {
     if (department) where.department = department;
     if (status) where.status = status;
 
-    return this.prisma.queue.findMany({
+    const results = await this.prisma.queue.findMany({
       where,
+      // 1. Tell Prisma to include the patient (User) relation
+      include: {
+        patient: true, 
+      },
       orderBy: [{ priorityScore: 'desc' }, { queueNumber: 'asc' }],
     });
+
+    // 2. Map the results to add 'patientPhone' at the top level
+    // This ensures your frontend "entry.patientPhone" logic finds the data
+    return results.map(item => ({
+      ...item,
+      patientPhone: item.patient?.phone || null,
+    }));
   }
 
   async findOne(id: number) {

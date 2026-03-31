@@ -89,7 +89,7 @@ model User {
   dateOfBirth      DateTime? @map("date_of_birth")
   gender           String?
   address          String?
-
+queues          Queue[]       @relation("UserQueues")
   role             UserRole  @default(PATIENT)
   isActive         Boolean   @default(true)  @map("is_active")
   isVerified       Boolean   @default(false) @map("is_verified")
@@ -224,6 +224,7 @@ model Queue {
   queueNumber Int      @map("queue_number")
 
   patientId     Int    @map("patient_id")
+ patient       User     @relation("UserQueues", fields: [patientId], references: [id])
   appointmentId Int?   @map("appointment_id")
   patientName   String @map("patient_name")
 
