@@ -36,14 +36,19 @@ export class MailService {
     return template(context);
   }
 
-  // ─── Core sender ──────────────────────────────────────────────────────────
-  async sendMail(to: string, subject: string, html: string): Promise<void> {
+  /**
+   * Core sender
+   * @param text The plain text version of the message (Save THIS to your database)
+   * @param html The stylized HTML version for the email inbox
+   */
+  async sendMail(to: string, subject: string, html: string, text: string): Promise<void> {
     try {
       await this.transporter.sendMail({
         from: this.configService.get<string>('MAIL_FROM'),
         to,
         subject,
-        html,
+        text, // Plain text version for non-HTML clients
+        html, // Rich content
       });
       console.log(`✅ Email sent to ${to}`);
     } catch (error) {
@@ -59,6 +64,10 @@ export class MailService {
     firstName: string,
   ): Promise<void> {
     const subject = 'Verify Your Email - SHAMS';
+    
+    // Clean string for DB
+    const text = `Hello ${firstName}, your SHAMS verification code is: ${code}. This code expires in 15 minutes.`;
+
     const html = `
       <!DOCTYPE html>
       <html>
@@ -88,7 +97,7 @@ export class MailService {
       </body>
       </html>
     `;
-    await this.sendMail(email, subject, html);
+    await this.sendMail(email, subject, html, text);
   }
 
   // ─── Password reset ───────────────────────────────────────────────────────
@@ -99,6 +108,10 @@ export class MailService {
   ): Promise<void> {
     const resetLink = `${this.configService.get<string>('FRONTEND_URL')}/reset-password?token=${resetToken}`;
     const subject = 'Reset Your Password - SHAMS';
+    
+    // Clean string for DB
+    const text = `Hello ${firstName}, click the link to reset your password: ${resetLink}. Link expires in 1 hour.`;
+
     const html = `
       <!DOCTYPE html>
       <html>
@@ -123,14 +136,13 @@ export class MailService {
             <p>Or copy and paste this link into your browser:</p>
             <p style="word-break: break-all; color: #667eea;">${resetLink}</p>
             <p><strong>This link will expire in 1 hour.</strong></p>
-            <p>If you didn't request a password reset, please ignore this email.</p>
           </div>
           <div class="footer"><p>&copy; ${new Date().getFullYear()} SHAMS. All rights reserved.</p></div>
         </div>
       </body>
       </html>
     `;
-    await this.sendMail(email, subject, html);
+    await this.sendMail(email, subject, html, text);
   }
 
   // ─── Password reset success ───────────────────────────────────────────────
@@ -139,6 +151,8 @@ export class MailService {
     firstName: string,
   ): Promise<void> {
     const subject = 'Password Reset Successful - SHAMS';
+    const text = `Hello ${firstName}, your password has been successfully reset. You can now log in.`;
+
     const html = `
       <!DOCTYPE html>
       <html>
@@ -158,14 +172,13 @@ export class MailService {
             <h2>Hello ${firstName},</h2>
             <p>Your password has been successfully reset.</p>
             <p>You can now log in to your SHAMS account using your new password.</p>
-            <p>If you didn't make this change, please contact our support team immediately.</p>
           </div>
           <div class="footer"><p>&copy; ${new Date().getFullYear()} SHAMS. All rights reserved.</p></div>
         </div>
       </body>
       </html>
     `;
-    await this.sendMail(email, subject, html);
+    await this.sendMail(email, subject, html, text);
   }
 
   // ─── Appointment reminder ─────────────────────────────────────────────────
@@ -181,6 +194,10 @@ export class MailService {
     },
   ): Promise<void> {
     const subject = 'Appointment Reminder - SHAMS';
+    
+    // Clean string for DB
+    const text = `Hello ${appointmentDetails.patientName}, this is a reminder for your ${appointmentDetails.type} appointment with Dr. ${appointmentDetails.doctorName} on ${appointmentDetails.date} at ${appointmentDetails.time} at ${appointmentDetails.location}.`;
+
     const html = `
       <!DOCTYPE html>
       <html>
@@ -207,41 +224,16 @@ export class MailService {
               <p><strong>Type:</strong> ${appointmentDetails.type}</p>
               <p><strong>Location:</strong> ${appointmentDetails.location}</p>
             </div>
-            <p>Please arrive 15 minutes early to complete check-in procedures.</p>
-            <p>If you need to reschedule or cancel, please do so at least 24 hours in advance.</p>
           </div>
           <div class="footer"><p>&copy; ${new Date().getFullYear()} SHAMS. All rights reserved.</p></div>
         </div>
       </body>
       </html>
     `;
-    await this.sendMail(email, subject, html);
+    await this.sendMail(email, subject, html, text);
   }
 
-  // ─── Admin invite (uses invite.hbs template) ──────────────────────────────
-  // async sendInviteEmail(
-  //   email: string,
-  //   firstName: string,
-  //   temporaryPassword: string,
-  //   verificationCode: string,
-  //   role: string,
-  // ): Promise<void> {
-  //   const loginUrl = `${this.configService.get<string>('FRONTEND_URL')}/login`;
-  //   const subject = `Welcome to SHAMS — Your ${role} Account Has Been Created`;
-
-  //   const html = await this.loadTemplate('invite', {
-  //     firstName,
-  //     role,
-  //     email,
-  //     password: temporaryPassword,
-  //     verificationCode,
-  //     loginUrl,
-  //     year: new Date().getFullYear(),
-  //   });
-
-  //   await this.sendMail(email, subject, html);
-  // }
-
+  // ─── Admin invite ─────────────────────────────────────────────────────────
   async sendInviteEmail(
     email: string,
     firstName: string,
@@ -252,6 +244,9 @@ export class MailService {
     const loginUrl = `${this.configService.get<string>('FRONTEND_URL')}/login`;
     const subject = `Welcome to SHAMS — Your ${role} Account Has Been Created`;
 
+    // Clean string for DB
+    const text = `Hello ${firstName}, your ${role} account has been created. Login at ${loginUrl} with Email: ${email}, Temp Password: ${temporaryPassword}. Verification Code: ${verificationCode}.`;
+
     const html = `
     <!DOCTYPE html>
     <html lang="en">
@@ -260,70 +255,38 @@ export class MailService {
         body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; margin: 0; padding: 0; background: #f3f4f6; }
         .wrapper { max-width: 620px; margin: 40px auto; padding: 0 16px 40px; }
         .card { background: #ffffff; border-radius: 16px; overflow: hidden; box-shadow: 0 4px 24px rgba(0,0,0,.08); }
-        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 36px 32px; text-align: center; }
-        .header h1 { color: #fff; font-size: 24px; font-weight: 700; margin: 0; }
-        .header p { color: rgba(255,255,255,.8); font-size: 14px; margin: 6px 0 0; }
+        .header { background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); padding: 36px 32px; text-align: center; color: white; }
         .body { padding: 32px; }
-        .body h2 { font-size: 20px; font-weight: 700; margin: 0 0 8px; }
-        .body p { color: #4b5563; font-size: 15px; margin-bottom: 12px; }
-        .role-badge { display: inline-block; background: #ede9fe; color: #6d28d9; font-size: 12px; font-weight: 700; letter-spacing: .5px; padding: 4px 12px; border-radius: 999px; text-transform: uppercase; margin-bottom: 20px; }
-        .info-box { background: #f9fafb; border: 1px solid #e5e7eb; border-left: 4px solid #667eea; border-radius: 8px; padding: 20px; margin: 20px 0; }
-        .info-row { display: flex; padding: 6px 0; font-size: 14px; border-bottom: 1px solid #f3f4f6; }
-        .info-row:last-child { border-bottom: none; }
-        .info-label { color: #6b7280; font-weight: 600; width: 48%; }
-        .info-value { color: #111827; font-weight: 700; word-break: break-all; }
-        .code-label { font-size: 14px; color: #6b7280; margin-bottom: 8px; }
-        .code-box { background: #fff; border: 2px dashed #667eea; border-radius: 12px; padding: 20px; text-align: center; font-size: 36px; font-weight: 800; letter-spacing: 8px; color: #667eea; margin: 8px 0 24px; }
-        .btn-wrap { text-align: center; margin: 24px 0; }
-        .btn { display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #ffffff; text-decoration: none; padding: 14px 36px; border-radius: 10px; font-size: 15px; font-weight: 700; }
-        .warning { background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 14px 18px; font-size: 13px; color: #92400e; margin-top: 20px; }
-        .footer { text-align: center; padding: 20px 32px; border-top: 1px solid #f3f4f6; }
-        .footer p { font-size: 12px; color: #9ca3af; margin: 0; }
-        .footer a { color: #667eea; text-decoration: none; }
+        .role-badge { display: inline-block; background: #ede9fe; color: #6d28d9; font-size: 12px; font-weight: 700; padding: 4px 12px; border-radius: 999px; text-transform: uppercase; margin-bottom: 20px; }
+        .info-box { background: #f9fafb; border-left: 4px solid #667eea; border-radius: 8px; padding: 20px; margin: 20px 0; }
+        .code-box { background: #fff; border: 2px dashed #667eea; border-radius: 12px; padding: 20px; text-align: center; font-size: 36px; font-weight: 800; color: #667eea; margin: 8px 0 24px; }
+        .btn { display: inline-block; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%); color: #ffffff; text-decoration: none; padding: 14px 36px; border-radius: 10px; font-weight: 700; }
+        .footer { text-align: center; padding: 20px 32px; border-top: 1px solid #f3f4f6; font-size: 12px; color: #9ca3af; }
       </style>
     </head>
     <body>
       <div class="wrapper">
         <div class="card">
-          <div class="header">
-            <h1>🏥 Welcome to SHAMS</h1>
-            <p>Smart Healthcare Appointment Management System</p>
-          </div>
+          <div class="header"><h1>🏥 Welcome to SHAMS</h1></div>
           <div class="body">
             <h2>Hello, ${firstName}!</h2>
-            <p>An account has been created for you by a SHAMS administrator. You can now log in and start using the platform.</p>
+            <p>An account has been created for you by a SHAMS administrator.</p>
             <span class="role-badge">${role}</span>
             <div class="info-box">
-              <div class="info-row">
-                <span class="info-label">Email (username)</span>
-                <span class="info-value">${email}</span>
-              </div>
-              <div class="info-row">
-                <span class="info-label">Temporary Password</span>
-                <span class="info-value">${temporaryPassword}</span>
-              </div>
+              <p><strong>Email:</strong> ${email}</p>
+              <p><strong>Temp Password:</strong> ${temporaryPassword}</p>
             </div>
-            <p class="code-label">Use this code to verify your account after first login:</p>
+            <p>Verification Code:</p>
             <div class="code-box">${verificationCode}</div>
-            <div class="btn-wrap">
-              <a href="${loginUrl}" class="btn">Login to SHAMS →</a>
-            </div>
-            <div class="warning">
-              <strong>⚠️ Security reminder:</strong> This is a temporary password.
-              Please change it immediately after your first login.
-              Do not share your credentials with anyone.
-            </div>
+            <div style="text-align:center;"><a href="${loginUrl}" class="btn">Login to SHAMS →</a></div>
           </div>
-          <div class="footer">
-            <p>You received this email because an administrator created an account for you on SHAMS.</p>
-            <p style="margin-top:8px">&copy; ${new Date().getFullYear()} SHAMS. All rights reserved.</p>
-          </div>
+          <div class="footer"><p>&copy; ${new Date().getFullYear()} SHAMS. All rights reserved.</p></div>
         </div>
       </div>
     </body>
     </html>
   `;
 
-    await this.sendMail(email, subject, html);
+    await this.sendMail(email, subject, html, text);
   }
 }

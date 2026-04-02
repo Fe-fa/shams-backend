@@ -44,6 +44,7 @@ export class NotificationsService {
               notification.recipientEmail,
               notification.title,
               notification.message,
+              notification.message
             );
           }
           break;
