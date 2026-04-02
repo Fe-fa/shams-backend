@@ -101,7 +101,7 @@ export class AppointmentsService {
         patientId,
         appointment.id,
         {
-          title: '📅 Appointment Booked',
+          title: 'Appointment Booked',
           inApp: `Your ${appointment.appointmentType.replace('_', ' ')} appointment on ${format(appointmentDate, 'MMM dd, yyyy')} at ${format(appointmentDate, 'hh:mm a')} has been booked. Please complete payment to confirm.`,
           email: this.buildBookingEmail(appointment, doctorName),
           sms: `SHAMS: Appointment booked for ${format(appointmentDate, 'MMM dd')} at ${format(appointmentDate, 'hh:mm a')} with ${doctorName}. Complete payment to confirm. Login to SHAMS to pay.`,
