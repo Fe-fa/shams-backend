@@ -1,8 +1,17 @@
+/**
+ * Full appointment lifecycle service including:
+ * - CRUD operations for appointments
+ * - Admin/Nurse confirmation (with payment guard)
+ * - Doctor "Call Patient" with real-time WS + SMS + email notification
+ * - "You're next in queue" notification for the next waiting patient
+ * - Booking, confirmation, and cancellation email builders
+ */
 import {
   Injectable,
   NotFoundException,
   BadRequestException,
   ForbiddenException,
+  Logger,
 } from '@nestjs/common';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MailService } from '../mail/mail.service';
@@ -37,6 +46,8 @@ const DEFAULT_INCLUDE = {
 
 @Injectable()
 export class AppointmentsService {
+  private readonly logger = new Logger(AppointmentsService.name);
+
   constructor(
     private prisma: PrismaService,
     private mailService: MailService,
@@ -44,7 +55,166 @@ export class AppointmentsService {
     private notificationsService: NotificationsService,
   ) {}
 
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ─── CALL PATIENT  (Doctor triggers this when ready) ───────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  async callPatient(appointmentId: number, doctorId: number) {
+    // 1. Load the target appointment
+    const appointment = await this.prisma.appointment.findUnique({
+      where: { id: appointmentId },
+      include: {
+        patient: { select: PATIENT_SELECT },
+        doctor:  { select: DOCTOR_SELECT },
+      },
+    });
+
+    if (!appointment) {
+      throw new NotFoundException('Appointment not found');
+    }
+
+    // Only the assigned doctor (or any doctor if unassigned) can call
+    if (appointment.doctorId && appointment.doctorId !== doctorId) {
+      throw new ForbiddenException('You can only call patients assigned to you');
+    }
+
+    // Must be in a callable state
+    const callableStatuses: AppointmentStatus[] = [
+      AppointmentStatus.CONFIRMED,
+      AppointmentStatus.SCHEDULED,
+    ];
+    if (!callableStatuses.includes(appointment.status)) {
+      throw new BadRequestException(
+        `Cannot call patient for appointment with status "${appointment.status}"`,
+      );
+    }
+
+    // 2. Update appointment status to IN_PROGRESS
+    const updated = await this.prisma.appointment.update({
+      where: { id: appointmentId },
+      data: {
+        status: AppointmentStatus.IN_PROGRESS,
+        actualStartTime: new Date(),
+        doctorId: appointment.doctorId ?? doctorId, // assign if was unassigned
+      },
+      include: DEFAULT_INCLUDE,
+    });
+
+    // 3. Update corresponding queue entry (if exists) to CALLED
+    try {
+      await this.prisma.queueEntry.updateMany({
+        where: {
+          appointmentId: appointmentId,
+          status: { in: ['WAITING', 'CHECKED_IN'] },
+        },
+        data: {
+          status: 'CALLED',
+          calledAt: new Date(),
+        },
+      });
+    } catch (err) {
+      // Queue entry might not exist if patient hasn't checked in yet — that's OK
+      this.logger.warn(`Queue entry update skipped for appointment ${appointmentId}: ${err?.message}`);
+    }
+
+    // 4. Build doctor name
+    const doctorName = updated.doctor
+      ? `Dr. ${updated.doctor.firstName} ${updated.doctor.lastName}`
+      : 'Your Doctor';
+
+    // 5. Send notification to the CALLED patient (IN_APP + SMS + EMAIL)
+    try {
+      await this.notificationsService.notifyAll(
+        appointment.patientId,
+        appointment.id,
+        {
+          title: '📞 You Are Being Called!',
+          inApp: `${doctorName} is ready to see you now! Please proceed to the consultation room immediately.`,
+          email: this.buildCallPatientEmail(updated, doctorName),
+          sms: `SHAMS: ${doctorName} is ready for you NOW. Please proceed to the consultation room immediately.`,
+          recipientEmail: appointment.patient.email,
+          recipientPhone: appointment.patient.phone,
+        },
+      );
+    } catch (err) {
+      this.logger.error(`Call-patient notification failed for appointment ${appointmentId}:`, err);
+    }
+
+    // 6. Notify the NEXT patient in queue ("You're next!")
+    await this.notifyNextInQueue(appointment.doctorId ?? doctorId, appointmentId);
+
+    return updated;
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
+  // ─── NOTIFY NEXT IN QUEUE ─────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+  private async notifyNextInQueue(doctorId: number, excludeAppointmentId: number) {
+    try {
+      // Find the next WAITING queue entry for the same doctor
+      const nextInQueue = await this.prisma.queueEntry.findFirst({
+        where: {
+          status: { in: ['WAITING', 'CHECKED_IN'] },
+          appointment: {
+            doctorId: doctorId,
+            id: { not: excludeAppointmentId },
+            status: { in: ['CONFIRMED', 'SCHEDULED'] },
+          },
+        },
+        include: {
+          appointment: {
+            include: {
+              patient: { select: PATIENT_SELECT },
+              doctor:  { select: DOCTOR_SELECT },
+            },
+          },
+        },
+        orderBy: [
+          { priorityLevel: 'desc' },   // EMERGENCY first
+          { queueNumber: 'asc' },       // then lowest queue number
+        ],
+      });
+
+      if (!nextInQueue?.appointment?.patient) {
+        this.logger.log('No next patient in queue to notify');
+        return;
+      }
+
+      const nextPatient = nextInQueue.appointment.patient;
+      const doctorName = nextInQueue.appointment.doctor
+        ? `Dr. ${nextInQueue.appointment.doctor.firstName} ${nextInQueue.appointment.doctor.lastName}`
+        : 'Your Doctor';
+
+      await this.notificationsService.notifyAll(
+        nextPatient.id,
+        nextInQueue.appointmentId,
+        {
+          title: '⏳ You Are Next in Queue!',
+          inApp: `Get ready! You are next in line to see ${doctorName}. Please stay in the waiting area.`,
+          email: `<div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto;padding:20px;">
+            <div style="background:linear-gradient(135deg,#f59e0b,#d97706);padding:20px;border-radius:10px 10px 0 0;text-align:center;">
+              <h2 style="color:#fff;margin:0;">⏳ You're Next!</h2>
+            </div>
+            <div style="background:#fffbeb;padding:20px;border-radius:0 0 10px 10px;border:1px solid #fbbf24;">
+              <p>Hello <strong>${nextPatient.firstName}</strong>,</p>
+              <p>You are <strong>next in line</strong> to see <strong>${doctorName}</strong>.</p>
+              <p>Please remain in the waiting area and be ready when called.</p>
+            </div>
+          </div>`,
+          sms: `SHAMS: You're NEXT! ${doctorName} will see you shortly. Please stay in the waiting area.`,
+          recipientEmail: nextPatient.email,
+          recipientPhone: nextPatient.phone,
+        },
+      );
+
+      this.logger.log(`"You're next" notification sent to patient ${nextPatient.id}`);
+    } catch (err) {
+      this.logger.error('Failed to notify next-in-queue patient:', err);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════════════════
   // ─── Create ────────────────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
   async create(patientId: number, dto: CreateAppointmentDto) {
     const appointmentDate = new Date(dto.appointmentDate);
 
@@ -116,7 +286,9 @@ export class AppointmentsService {
     return appointment;
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
   // ─── Confirm (ADMIN / NURSE) — REQUIRES completed payment ─────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
   async confirmAppointment(id: number, confirmedBy: number) {
     const appointment = await this.prisma.appointment.findUnique({
       where: { id },
@@ -176,7 +348,9 @@ export class AppointmentsService {
     return updated;
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
   // ─── Find All ─────────────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
   async findAll(filterDto: FilterAppointmentDto, userId: number, userRole: string) {
     const { page = 1, limit = 10, ...filters } = filterDto;
     const skip = (page - 1) * limit;
@@ -213,7 +387,9 @@ export class AppointmentsService {
     };
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
   // ─── Find One ─────────────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
   async findOne(id: number, userId: number, userRole: string) {
     const appointment = await this.prisma.appointment.findUnique({
       where: { id },
@@ -232,7 +408,9 @@ export class AppointmentsService {
     return appointment;
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
   // ─── Update ───────────────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
   async update(id: number, dto: UpdateAppointmentDto, userId: number, userRole: string) {
     const appointment = await this.prisma.appointment.findUnique({ where: { id } });
     if (!appointment) throw new NotFoundException('Appointment not found');
@@ -259,9 +437,9 @@ export class AppointmentsService {
 
     const updateData: any = { ...dto };
     if (dto.appointmentDate) updateData.appointmentDate = new Date(dto.appointmentDate);
-    if (dto.status === AppointmentStatus.CONFIRMED  && !appointment.confirmedAt)  updateData.confirmedAt  = new Date();
+    if (dto.status === AppointmentStatus.CONFIRMED  && !appointment.confirmedAt)     updateData.confirmedAt     = new Date();
     if (dto.status === AppointmentStatus.IN_PROGRESS && !appointment.actualStartTime) updateData.actualStartTime = new Date();
-    if (dto.status === AppointmentStatus.COMPLETED  && !appointment.actualEndTime) updateData.actualEndTime = new Date();
+    if (dto.status === AppointmentStatus.COMPLETED  && !appointment.actualEndTime)   updateData.actualEndTime   = new Date();
     if (dto.checkedIn && !appointment.checkedIn) updateData.checkInTime = new Date();
 
     return this.prisma.appointment.update({
@@ -271,7 +449,9 @@ export class AppointmentsService {
     });
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
   // ─── Cancel ───────────────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
   async cancel(id: number, userId: number, userRole: string) {
     const appointment = await this.prisma.appointment.findUnique({
       where: { id },
@@ -313,7 +493,9 @@ export class AppointmentsService {
     return updated;
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
   // ─── Upcoming ─────────────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
   async getUpcoming(userId: number, userRole: string) {
     const where: any = {
       appointmentDate: { gte: new Date() },
@@ -326,7 +508,9 @@ export class AppointmentsService {
     });
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
   // ─── History ──────────────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
   async getHistory(userId: number, userRole: string) {
     const where: any = {
       status: { in: [AppointmentStatus.COMPLETED, AppointmentStatus.CANCELLED, AppointmentStatus.NO_SHOW] },
@@ -338,7 +522,36 @@ export class AppointmentsService {
     });
   }
 
+  // ═══════════════════════════════════════════════════════════════════════════
   // ─── Email builders ───────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════════════════
+
+  private buildCallPatientEmail(appt: any, doctorName: string): string {
+    return `
+      <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;">
+        <div style="background:linear-gradient(135deg,#ef4444,#dc2626);padding:30px;text-align:center;border-radius:10px 10px 0 0;">
+          <h1 style="color:#fff;margin:0;">📞 You Are Being Called!</h1>
+        </div>
+        <div style="background:#fef2f2;padding:30px;border-radius:0 0 10px 10px;border:1px solid #fca5a5;">
+          <h2 style="color:#dc2626;">Hello ${appt.patient?.firstName ?? 'Patient'}!</h2>
+          <p style="font-size:18px;font-weight:bold;color:#1f2937;">
+            ${doctorName} is ready to see you <span style="color:#dc2626;">NOW</span>.
+          </p>
+          <div style="background:#fff;border-left:4px solid #ef4444;padding:20px;margin:20px 0;border-radius:4px;">
+            <p><strong>Doctor:</strong> ${doctorName}</p>
+            <p><strong>Appointment Type:</strong> ${appt.appointmentType?.replace('_', ' ') ?? 'Consultation'}</p>
+            <p><strong>Time:</strong> ${format(new Date(appt.appointmentDate), 'hh:mm a')}</p>
+          </div>
+          <div style="background:#fef3c7;border:1px solid #f59e0b;border-radius:8px;padding:15px;margin:15px 0;">
+            <p style="margin:0;color:#92400e;font-weight:bold;">
+              ⚡ Please proceed to the consultation room immediately.
+            </p>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
   private buildBookingEmail(appt: any, doctorName: string): string {
     const price = appt.service ? `KES ${Number(appt.service.price).toLocaleString()}` : 'See admin';
     return `
