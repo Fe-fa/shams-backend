@@ -1,3 +1,16 @@
+/**
+ * notifications.gateway.ts
+ *
+ * WebSocket gateway for real-time notifications.
+ * Handles:
+ * - JWT-based authentication on connection
+ * - Per-user socket rooms (supports multi-tab)
+ * - Broadcasting notifications to specific users
+ * - Emits 'notification' event for new notifications (matches frontend listener)
+ * - Emits 'notification:unread-count' for count sync
+ * - Emits 'notification:read' and 'notification:all-read' for read state sync
+ * - Online status tracking
+ */
 import {
   WebSocketGateway,
   WebSocketServer,
@@ -41,6 +54,7 @@ export class NotificationsGateway
         (client.handshake.headers?.authorization as string)?.replace('Bearer ', '');
 
       if (!token) {
+        this.logger.warn(`Connection rejected: no token provided (socket ${client.id})`);
         client.disconnect();
         return;
       }
@@ -62,7 +76,8 @@ export class NotificationsGateway
 
       this.logger.log(`✅ User ${userId} connected (socket ${client.id})`);
       client.emit('connected', { message: 'Connected to notification service' });
-    } catch {
+    } catch (err) {
+      this.logger.warn(`Connection rejected: invalid token (socket ${client.id})`);
       client.disconnect();
     }
   }
@@ -80,19 +95,41 @@ export class NotificationsGateway
     }
   }
 
-  // ─── Emit to specific user ───────────────────────────────────────────────
+  // ─── Emit to specific user (generic) ─────────────────────────────────────
   sendToUser(userId: number, event: string, data: unknown) {
     this.server.to(`user-${userId}`).emit(event, data);
   }
 
-  // ─── Broadcast notification to user ──────────────────────────────────────
+  // ─── Broadcast new notification to user ──────────────────────────────────
+  // Emits on 'notification' — this is what the frontend socket listeners expect
   sendNotification(userId: number, notification: unknown) {
     this.sendToUser(userId, 'notification', notification);
+    this.logger.log(`📨 Notification sent to user ${userId}`);
+  }
+
+  // ─── Emit unread count sync ──────────────────────────────────────────────
+  sendUnreadCount(userId: number, count: number) {
+    this.sendToUser(userId, 'notification:unread-count', { count });
+  }
+
+  // ─── Emit single read ────────────────────────────────────────────────────
+  sendNotificationRead(userId: number, notificationId: number) {
+    this.sendToUser(userId, 'notification:read', { id: notificationId });
+  }
+
+  // ─── Emit all-read ───────────────────────────────────────────────────────
+  sendAllNotificationsRead(userId: number) {
+    this.sendToUser(userId, 'notification:all-read', {});
   }
 
   // ─── Online check ────────────────────────────────────────────────────────
   isUserOnline(userId: number): boolean {
     const sockets = this.userSockets.get(userId);
     return !!sockets && sockets.size > 0;
+  }
+
+  // ─── Get online user count ────────────────────────────────────────────────
+  getOnlineUserCount(): number {
+    return this.userSockets.size;
   }
 }
