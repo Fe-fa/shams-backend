@@ -1,3 +1,15 @@
+/**
+ * REST controller for appointment lifecycle:
+ * - POST   /appointments              → Patient creates appointment
+ * - POST   /appointments/:id/confirm  → Admin/Nurse confirms (requires payment)
+ * - POST   /appointments/:id/call-patient → Doctor calls patient (sends WS + SMS + email)
+ * - GET    /appointments              → List (filtered by role)
+ * - GET    /appointments/upcoming     → Upcoming appointments
+ * - GET    /appointments/history      → Past appointments
+ * - GET    /appointments/:id          → Single appointment detail
+ * - PATCH  /appointments/:id          → Update appointment
+ * - DELETE /appointments/:id          → Cancel appointment
+ */
 import {
   Controller,
   Get,
@@ -36,6 +48,16 @@ export class AppointmentsController {
   @Roles('ADMIN', 'NURSE')
   confirm(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: any) {
     return this.appointmentsService.confirmAppointment(id, user.id);
+  }
+
+  // ─── Call Patient (DOCTOR only) ───────────────────────────────────────────
+  // When the doctor is ready, they hit this endpoint.
+  // It sends IN_APP + SMS + EMAIL notification to the patient,
+  // updates the appointment to IN_PROGRESS, and notifies the next patient in queue.
+  @Post(':id/call-patient')
+  @Roles('DOCTOR', 'ADMIN', 'NURSE')
+  callPatient(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: any) {
+    return this.appointmentsService.callPatient(id, user.id);
   }
 
   // ─── List ──────────────────────────────────────────────────────────────────
